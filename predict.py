@@ -1,4 +1,4 @@
-"""  
+"""
 Copyright (c) 2019-present NAVER Corp.
 MIT License
 """
@@ -20,8 +20,8 @@ import cv2
 from skimage import io
 import numpy as np
 import craft.craft_utils as craft_utils
-import craft.imgproc as imgproc
-import craft.file_utils as file_utils
+#import craft.imgproc as imgproc
+#import craft.file_utils as file_utils
 import json
 import zipfile
 
@@ -99,29 +99,29 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, c
 
 def predict_seg(
     image,
-    trained_model='craft/weights/craft_mlt_25k.pth', 
-    text_threshold=0.7, 
-    low_text=0.4, 
-    link_threshold=0.4, 
-    cuda=True, 
-    canvas_size=3200, 
-    mag_ratio=1.5, 
-    poly=False, 
-    show_time=False, 
-    test_folder='craft/data/', 
-    refine=False, 
+    trained_model='craft/weights/craft_mlt_25k.pth',
+    text_threshold=0.7,
+    low_text=0.4,
+    link_threshold=0.4,
+    cuda=True,
+    canvas_size=3200,
+    mag_ratio=1.5,
+    poly=False,
+    show_time=False,
+    #test_folder='craft/data/',
+    refine=False,
     refiner_model='craft/weights/craft_refiner_CTW1500.pth'
-): 
+):
 
-    
+
 
     """ For test images in a folder """
-    image_list, _, _ = file_utils.get_files(test_folder)
-    print(image_list)
+    #image_list, _, _ = file_utils.get_files(test_folder)
+    #print(image_list)
 
-    result_folder = 'craft/result/'
-    if not os.path.isdir(result_folder):
-        os.mkdir(result_folder)
+    #result_folder = 'craft/result/'
+    #if not os.path.isdir(result_folder):
+    #    os.mkdir(result_folder)
 
     # load net
     net = CRAFT()     # initialize
@@ -158,14 +158,14 @@ def predict_seg(
     t = time.time()
 
     # load data
-    
+
         #image = imgproc.loadImage(image_path)
 
     bboxes, polys, score_text = test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, canvas_size, mag_ratio, refine_net)
         #print("bboxes = ",bboxes)
         #print("polys = ",polys)
         # save score text
-        
+
         #filename, file_ext = os.path.splitext(os.path.basename(image_path))
         #mask_file = result_folder + "/res_" + filename + '_mask.jpg'
         #cv2.imwrite(mask_file, score_text)
