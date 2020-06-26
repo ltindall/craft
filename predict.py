@@ -20,7 +20,7 @@ import cv2
 from skimage import io
 import numpy as np
 import craft.craft_utils as craft_utils
-#import craft.imgproc as imgproc
+import craft.imgproc as imgproc
 #import craft.file_utils as file_utils
 import json
 import zipfile
@@ -96,34 +96,9 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, c
     return boxes, polys, ret_score_text
 
 
-
-def predict_seg(
-    image,
-    trained_model='craft/weights/craft_mlt_25k.pth',
-    text_threshold=0.7,
-    low_text=0.4,
-    link_threshold=0.4,
-    cuda=True,
-    canvas_size=3200,
-    mag_ratio=1.5,
-    poly=False,
-    show_time=False,
-    #test_folder='craft/data/',
-    refine=False,
-    refiner_model='craft/weights/craft_refiner_CTW1500.pth'
-):
-
-
-
-    """ For test images in a folder """
-    #image_list, _, _ = file_utils.get_files(test_folder)
-    #print(image_list)
-
-    #result_folder = 'craft/result/'
-    #if not os.path.isdir(result_folder):
-    #    os.mkdir(result_folder)
-
+def load_predict_net(trained_model='craft/weights/craft_mlt_25k.pth'): 
     # load net
+    cuda= torch.cuda.is_available()
     net = CRAFT()     # initialize
 
     print('Loading weights from checkpoint (' + trained_model + ')')
@@ -138,40 +113,124 @@ def predict_seg(
         cudnn.benchmark = False
 
     net.eval()
+    return net
+
+def predict_seg(
+    image,
+    trained_model='craft/weights/craft_mlt_25k.pth',
+    text_threshold=0.7,
+    low_text=0.4,
+    link_threshold=0.4,
+    canvas_size=3200,
+    mag_ratio=1.5,
+    poly=False,
+    show_time=False,
+    #test_folder='craft/data/',
+    refine=False,
+    refiner_model='craft/weights/craft_refiner_CTW1500.pth', 
+    preload_net=None
+):
+    cuda= torch.cuda.is_available()
+    # Load CRAFT model with trained weights 
+    if preload_net is not None: 
+        net = preload_net
+    else: 
+        net = CRAFT()   
+        #print('Loading weights from checkpoint (' + trained_model + ')')
+        if cuda:
+            net.load_state_dict(copyStateDict(torch.load(trained_model)))
+        else:
+            net.load_state_dict(copyStateDict(torch.load(trained_model, map_location='cpu')))
+        if cuda:
+            net = net.cuda()
+            net = torch.nn.DataParallel(net)
+            cudnn.benchmark = False
+        net.eval()
 
     # LinkRefiner
     refine_net = None
     if refine:
         from refinenet import RefineNet
         refine_net = RefineNet()
-        print('Loading weights of refiner from checkpoint (' + refiner_model + ')')
+        #print('Loading weights of refiner from checkpoint (' + refiner_model + ')')
         if cuda:
             refine_net.load_state_dict(copyStateDict(torch.load(refiner_model)))
             refine_net = refine_net.cuda()
             refine_net = torch.nn.DataParallel(refine_net)
         else:
             refine_net.load_state_dict(copyStateDict(torch.load(refiner_model, map_location='cpu')))
-
         refine_net.eval()
         poly = True
-
     t = time.time()
-
-    # load data
-
-        #image = imgproc.loadImage(image_path)
-
+    print("finding text bounding boxes...")
     bboxes, polys, score_text = test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, canvas_size, mag_ratio, refine_net)
-        #print("bboxes = ",bboxes)
-        #print("polys = ",polys)
-        # save score text
-
-        #filename, file_ext = os.path.splitext(os.path.basename(image_path))
-        #mask_file = result_folder + "/res_" + filename + '_mask.jpg'
-        #cv2.imwrite(mask_file, score_text)
-
-        #file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
-
     print("elapsed time : {}s".format(time.time() - t))
-
+    # bboxes is an array with shape (n, 4, 2); each bbox is orderdered [bottom left, bottom right, top right, top left]
     return bboxes
+
+def get_bbox_centers(bboxes): 
+    centers = []
+    for box in bboxes: 
+        x = int(box[1][0] - (box[1][0] - box[0][0])/2)
+        y = int(box[3][1] - (box[3][1] - box[0][1])/2)
+        centers.append([x,y])
+
+    return np.array(centers)
+
+def nearest_neighbor_pairs(centers, timestamp_img=None): 
+    ''' 
+    Returns the closest neighbor pairs. 
+    '''
+    center_times = np.zeros(len(centers))
+    if timestamp_img is not None: 
+        for i, center in enumerate(centers): 
+            center_times[i] = timestamp_img[tuple(center[::-1])]
+    pairs = []
+    for i, centerA in enumerate(centers): 
+        min_dist = None 
+        min_pair = None
+        min_center_idx = None
+        for j, centerB in enumerate(centers): 
+            if i != j: 
+                distance = np.linalg.norm(centerA - centerB) 
+                if min_dist == None or min_dist > distance: 
+                    min_dist = distance
+                    min_center_idx = j
+        if center_times[i] == center_times[min_center_idx]: 
+            min_pair = np.array([centerA, centers[min_center_idx]])
+            pairs.append(min_pair)
+        #if min_pair is not None: 
+        #    pairs.append(min_pair)
+    return np.array(pairs)
+
+def cluster_centers_on_location(centers): 
+    '''
+    Returns pairs where the distance between them is less than 0.5*average distance between all pairs. 
+    '''
+    distances = []
+    for i, centerA in enumerate(centers): 
+        for j, centerB in enumerate(centers[i+1:]): 
+            distances.append(np.linalg.norm(centerA - centerB))
+    distances = np.array(distances)
+    mean_distance = np.mean(distances)
+    pairs = []
+    for i, centerA in enumerate(centers): 
+        for j, centerB in enumerate(centers[i+1:]): 
+            if(np.linalg.norm(centerA - centerB) < 0.5 * mean_distance): 
+                pairs.append(np.array([centerA, centerB]))
+    return np.array(pairs)
+
+def cluster_centers_on_time(centers, timestamp_img): 
+    center_times = []
+    for center in centers: 
+        center_times.append(timestamp_img[tuple(center[::-1])])
+    time_clusters = []
+    for c_time in np.unique(center_times): 
+        c_time_centers = centers[center_times==c_time]
+        time_cluster = []
+        for i, centerA in enumerate(c_time_centers): 
+            for j, centerB in enumerate(c_time_centers[i+1:]): 
+                time_cluster.append(np.array([centerA, centerB]))
+        time_clusters.append(np.array(time_cluster))
+    return np.array(time_clusters)
+
